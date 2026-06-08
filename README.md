@@ -31,7 +31,7 @@ Required for `/move/cookidoo/plan`:
 Optional for `/move/cookidoo`:
 
 - `COOKIDOO_COUNTRY` - defaults to `pl`
-- `COOKIDOO_LANGUAGE` - defaults to `pl-PL`
+- `COOKIDOO_LANGUAGE` - defaults to `pl`
 - `COOKIDOO_COOKIES_FILE` - defaults to `.cookidoo-cookies`
 - `MEALIE_COOKIDOO_PLAN_ENTRY_TYPE` - defaults to `dinner`
 - `MEALIE_COOKIDOO_PLAN_TITLE` - defaults to `Cookidoo`
