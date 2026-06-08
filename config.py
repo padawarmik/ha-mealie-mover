@@ -5,6 +5,9 @@ from os import getenv
 COOKIDOO_SHOPPING_LIST_ENTITY = "todo.cookidoo_shopping_list"
 MEALIE_SHOPPING_LIST_NAME = "shopping"
 REQUEST_TIMEOUT_SECONDS = 15
+DEFAULT_COOKIDOO_COUNTRY = "pl"
+DEFAULT_COOKIDOO_LANGUAGE = "pl-PL"
+DEFAULT_COOKIDOO_COOKIES_FILE = ".cookidoo-cookies"
 
 
 class ConfigError(Exception):
@@ -57,3 +60,30 @@ class AppConfig:
     @property
     def mealie_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.mealie_token}"}
+
+
+@dataclass(frozen=True)
+class CookidooAppConfig:
+    email: str
+    password: str
+    country: str = DEFAULT_COOKIDOO_COUNTRY
+    language: str = DEFAULT_COOKIDOO_LANGUAGE
+    cookies_file: str = DEFAULT_COOKIDOO_COOKIES_FILE
+
+    @classmethod
+    def from_env(cls) -> "CookidooAppConfig":
+        required_env_vars = {
+            "COOKIDOO_EMAIL": getenv("COOKIDOO_EMAIL") or "",
+            "COOKIDOO_PASSWORD": getenv("COOKIDOO_PASSWORD") or "",
+        }
+        missing_env_vars = [name for name, value in required_env_vars.items() if not value]
+        if missing_env_vars:
+            raise ConfigError(f"Missing environment variables: {', '.join(missing_env_vars)}")
+
+        return cls(
+            email=required_env_vars["COOKIDOO_EMAIL"],
+            password=required_env_vars["COOKIDOO_PASSWORD"],
+            country=getenv("COOKIDOO_COUNTRY") or DEFAULT_COOKIDOO_COUNTRY,
+            language=getenv("COOKIDOO_LANGUAGE") or DEFAULT_COOKIDOO_LANGUAGE,
+            cookies_file=getenv("COOKIDOO_COOKIES_FILE") or DEFAULT_COOKIDOO_COOKIES_FILE,
+        )

@@ -3,7 +3,9 @@ import logging
 import requests
 from flask import Flask
 
-from config import AppConfig, ConfigError
+from config import AppConfig, ConfigError, CookidooAppConfig
+from cookidoo_api.exceptions import CookidooException
+from cookidoo_mover import move_cookidoo_shopping_list_to_mealie
 from mover import ShoppingListMoverError, move_shopping_list
 
 
@@ -31,6 +33,30 @@ def create_app() -> Flask:
 
         if status_code == 201:
             logger.info("Move completed")
+
+        return "", status_code
+
+    @app.route("/move/cookidoo", methods=["GET", "POST"])
+    def move_cookidoo():
+        try:
+            status_code = move_cookidoo_shopping_list_to_mealie(
+                AppConfig.from_env(),
+                CookidooAppConfig.from_env(),
+            )
+        except ConfigError as error:
+            logger.exception("Invalid application configuration")
+            return str(error), 500
+        except (
+            CookidooException,
+            ShoppingListMoverError,
+            KeyError,
+            requests.RequestException,
+        ) as error:
+            logger.exception("Cookidoo shopping list move failed")
+            return str(error), 500
+
+        if status_code == 201:
+            logger.info("Cookidoo move completed")
 
         return "", status_code
 

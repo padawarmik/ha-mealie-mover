@@ -35,14 +35,23 @@ def _move_shopping_list(config: AppConfig, http_session: requests.Session) -> in
 
     logger.info("Found Mealie shopping list ID: %s", mealie_shopping_list_id)
 
-    payload = build_mealie_items(cookidoo_items, mealie_shopping_list_id)
-    response = http_session.post(
+    response = create_mealie_items(config, http_session, cookidoo_items, mealie_shopping_list_id)
+    return response.status_code
+
+
+def create_mealie_items(
+    config: AppConfig,
+    session: requests.Session,
+    shopping_list: list[str],
+    shopping_list_id: str,
+) -> requests.Response:
+    payload = build_mealie_items(shopping_list, shopping_list_id)
+    return session.post(
         config.mealie_create_items_url,
         headers=config.mealie_headers,
         json=payload,
         timeout=config.request_timeout,
     )
-    return response.status_code
 
 
 def get_cookidoo_shopping_list(config: AppConfig, session: requests.Session) -> list[str]:
