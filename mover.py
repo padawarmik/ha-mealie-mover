@@ -54,6 +54,48 @@ def create_mealie_items(
     )
 
 
+def create_mealie_plan_note(
+    config: AppConfig,
+    session: requests.Session,
+    date: str,
+    text: str,
+) -> requests.Response:
+    payload = {
+        "date": date,
+        "entryType": config.mealie_cookidoo_plan_entry_type,
+        "title": config.mealie_cookidoo_plan_title,
+        "text": text,
+    }
+    return session.post(
+        config.mealie_mealplans_url,
+        headers=config.mealie_headers,
+        json=payload,
+        timeout=config.request_timeout,
+    )
+
+
+def mealie_plan_note_exists(
+    config: AppConfig,
+    session: requests.Session,
+    date: str,
+    text: str,
+) -> bool:
+    response = session.get(
+        config.mealie_mealplans_url,
+        headers=config.mealie_headers,
+        params={"start_date": date, "end_date": date, "perPage": 100},
+        timeout=config.request_timeout,
+    )
+    response.raise_for_status()
+
+    return any(
+        item.get("date") == date
+        and item.get("title") == config.mealie_cookidoo_plan_title
+        and item.get("text") == text
+        for item in response.json().get("items", [])
+    )
+
+
 def get_cookidoo_shopping_list(config: AppConfig, session: requests.Session) -> list[str]:
     response = session.post(
         config.home_assistant_get_items_url,

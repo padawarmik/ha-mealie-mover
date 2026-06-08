@@ -4,6 +4,8 @@ from os import getenv
 
 COOKIDOO_SHOPPING_LIST_ENTITY = "todo.cookidoo_shopping_list"
 MEALIE_SHOPPING_LIST_NAME = "shopping"
+MEALIE_COOKIDOO_PLAN_ENTRY_TYPE = "dinner"
+MEALIE_COOKIDOO_PLAN_TITLE = "Cookidoo"
 REQUEST_TIMEOUT_SECONDS = 15
 DEFAULT_COOKIDOO_COUNTRY = "pl"
 DEFAULT_COOKIDOO_LANGUAGE = "pl-PL"
@@ -20,25 +22,35 @@ class AppConfig:
     mealie_url: str
     home_assistant_token: str
     mealie_token: str
+    mealie_cookidoo_plan_entry_type: str = MEALIE_COOKIDOO_PLAN_ENTRY_TYPE
+    mealie_cookidoo_plan_title: str = MEALIE_COOKIDOO_PLAN_TITLE
     request_timeout: int = REQUEST_TIMEOUT_SECONDS
 
     @classmethod
-    def from_env(cls) -> "AppConfig":
+    def from_env(cls, require_home_assistant: bool = True) -> "AppConfig":
         required_env_vars = {
-            "HA_URL": getenv("HA_URL") or "",
             "MEALIE_URL": getenv("MEALIE_URL") or "",
-            "HA_TOKEN": getenv("HA_TOKEN") or "",
             "MEALIE_TOKEN": getenv("MEALIE_TOKEN") or "",
         }
+        if require_home_assistant:
+            required_env_vars.update(
+                {
+                    "HA_URL": getenv("HA_URL") or "",
+                    "HA_TOKEN": getenv("HA_TOKEN") or "",
+                }
+            )
+
         missing_env_vars = [name for name, value in required_env_vars.items() if not value]
         if missing_env_vars:
             raise ConfigError(f"Missing environment variables: {', '.join(missing_env_vars)}")
 
         return cls(
-            home_assistant_url=required_env_vars["HA_URL"].rstrip("/"),
+            home_assistant_url=required_env_vars.get("HA_URL", "").rstrip("/"),
             mealie_url=required_env_vars["MEALIE_URL"].rstrip("/"),
-            home_assistant_token=required_env_vars["HA_TOKEN"],
+            home_assistant_token=required_env_vars.get("HA_TOKEN", ""),
             mealie_token=required_env_vars["MEALIE_TOKEN"],
+            mealie_cookidoo_plan_entry_type=getenv("MEALIE_COOKIDOO_PLAN_ENTRY_TYPE") or MEALIE_COOKIDOO_PLAN_ENTRY_TYPE,
+            mealie_cookidoo_plan_title=getenv("MEALIE_COOKIDOO_PLAN_TITLE") or MEALIE_COOKIDOO_PLAN_TITLE,
         )
 
     @property
@@ -52,6 +64,10 @@ class AppConfig:
     @property
     def mealie_create_items_url(self) -> str:
         return f"{self.mealie_url}/api/households/shopping/items/create-bulk"
+
+    @property
+    def mealie_mealplans_url(self) -> str:
+        return f"{self.mealie_url}/api/households/mealplans"
 
     @property
     def home_assistant_headers(self) -> dict[str, str]:
