@@ -2,6 +2,16 @@ from dataclasses import dataclass
 from os import getenv
 
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+
+if load_dotenv is not None:
+    load_dotenv(override=False)
+
+
 COOKIDOO_SHOPPING_LIST_ENTITY = "todo.cookidoo_shopping_list"
 MEALIE_SHOPPING_LIST_NAME = "shopping"
 MEALIE_COOKIDOO_PLAN_ENTRY_TYPE = "dinner"
@@ -9,7 +19,7 @@ MEALIE_COOKIDOO_PLAN_TITLE = "Cookidoo"
 REQUEST_TIMEOUT_SECONDS = 15
 DEFAULT_COOKIDOO_COUNTRY = "pl"
 DEFAULT_COOKIDOO_LANGUAGE = "pl"
-DEFAULT_COOKIDOO_COOKIES_FILE = ".cookidoo-cookies"
+DEFAULT_COOKIDOO_COOKIES_FILE = "/tmp/.cookidoo-cookies"
 
 
 class ConfigError(Exception):

@@ -2,13 +2,14 @@ from datetime import date, datetime
 import logging
 
 import requests
-from flask import Flask, request
+from flask import Flask, jsonify, request
 
 from config import AppConfig, ConfigError, CookidooAppConfig
 from cookidoo_api.exceptions import CookidooException
 from cookidoo_mover import (
     add_cookidoo_plan_note_to_mealie,
     move_cookidoo_shopping_list_to_mealie,
+    sync_cookidoo_plan_notes_to_mealie,
 )
 from mover import ShoppingListMoverError, move_shopping_list
 
@@ -91,6 +92,28 @@ def create_app() -> Flask:
             logger.info("Cookidoo plan note added")
 
         return "", status_code
+
+    @app.route("/move/cookidoo/plan/sync", methods=["GET", "POST"])
+    def sync_cookidoo_plan():
+        try:
+            summary = sync_cookidoo_plan_notes_to_mealie(
+                AppConfig.from_env(require_home_assistant=False),
+                CookidooAppConfig.from_env(),
+            )
+        except ConfigError as error:
+            logger.exception("Invalid application configuration")
+            return str(error), 500
+        except (
+            CookidooException,
+            ShoppingListMoverError,
+            KeyError,
+            requests.RequestException,
+        ) as error:
+            logger.exception("Cookidoo plan sync failed")
+            return str(error), 500
+
+        logger.info("Cookidoo plan sync completed: %s", summary)
+        return jsonify(summary), 200
 
     return app
 

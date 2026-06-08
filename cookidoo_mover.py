@@ -1,17 +1,17 @@
 import asyncio
-from collections.abc import Mapping, Sequence
-from datetime import date
+from collections.abc import Sequence
+from datetime import date, timedelta
 import logging
 from pathlib import Path
-from typing import Any
 
 import aiohttp
 from cookidoo_api import Cookidoo
-from cookidoo_api.const import RECIPES_IN_CALENDAR_WEEK_PATH
+from cookidoo_api.const import DEFAULT_API_HEADERS, RECIPES_IN_CALENDAR_WEEK_PATH
 from cookidoo_api.exceptions import CookidooAuthException, CookidooException
 from cookidoo_api.helpers import get_localization_options
 from cookidoo_api.types import (
     CookidooAdditionalItem,
+    CookidooCalendarDayRecipe,
     CookidooConfig as CookidooLibraryConfig,
     CookidooIngredientItem,
     CookidooLocalizationConfig,
@@ -91,6 +91,57 @@ def add_cookidoo_plan_note_to_mealie(
         return response.status_code
 
 
+def sync_cookidoo_plan_notes_to_mealie(
+    app_config: AppConfig,
+    cookidoo_config: CookidooAppConfig,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, int | str]:
+    today = date.today()
+    sync_start_date = start_date or today - timedelta(days=7)
+    sync_end_date = end_date or today + timedelta(days=7)
+    planned_recipes_by_date = asyncio.run(
+        get_cookidoo_planned_recipes_for_range(
+            cookidoo_config,
+            sync_start_date,
+            sync_end_date,
+        )
+    )
+
+    summary = {
+        "start_date": sync_start_date.isoformat(),
+        "end_date": sync_end_date.isoformat(),
+        "checked_days": 0,
+        "empty_days": 0,
+        "existing_notes": 0,
+        "created_notes": 0,
+    }
+
+    with requests.Session() as session:
+        current_date = sync_start_date
+        while current_date <= sync_end_date:
+            summary["checked_days"] += 1
+            planned_recipes = planned_recipes_by_date.get(current_date.isoformat(), [])
+            if not planned_recipes:
+                summary["empty_days"] += 1
+                current_date += timedelta(days=1)
+                continue
+
+            note_text = build_cookidoo_plan_note(planned_recipes)
+            date_value = current_date.isoformat()
+            if mealie_plan_note_exists(app_config, session, date_value, note_text):
+                summary["existing_notes"] += 1
+                current_date += timedelta(days=1)
+                continue
+
+            response = create_mealie_plan_note(app_config, session, date_value, note_text)
+            response.raise_for_status()
+            summary["created_notes"] += 1
+            current_date += timedelta(days=1)
+
+    return summary
+
+
 async def get_cookidoo_api_shopping_list(config: CookidooAppConfig) -> list[str]:
     cookie_jar = aiohttp.CookieJar(unsafe=True)
     async with aiohttp.ClientSession(cookie_jar=cookie_jar) as session:
@@ -130,6 +181,19 @@ async def get_cookidoo_planned_recipes_for_day(
     config: CookidooAppConfig,
     planned_date: date,
 ) -> list[str]:
+    planned_recipes_by_date = await get_cookidoo_planned_recipes_for_range(
+        config,
+        planned_date,
+        planned_date,
+    )
+    return planned_recipes_by_date.get(planned_date.isoformat(), [])
+
+
+async def get_cookidoo_planned_recipes_for_range(
+    config: CookidooAppConfig,
+    start_date: date,
+    end_date: date,
+) -> dict[str, list[str]]:
     cookie_jar = aiohttp.CookieJar(unsafe=True)
     async with aiohttp.ClientSession(cookie_jar=cookie_jar) as session:
         localization = await get_cookidoo_localization(config)
@@ -144,7 +208,12 @@ async def get_cookidoo_planned_recipes_for_day(
         loaded_cookies = await login_to_cookidoo(cookidoo, config.cookies_file)
 
         try:
-            return await get_cookidoo_calendar_recipes_for_day(cookidoo, planned_date)
+            return await get_cookidoo_calendar_recipes_for_range(
+                cookidoo,
+                session,
+                start_date,
+                end_date,
+            )
         except CookidooAuthException:
             if not loaded_cookies:
                 raise
@@ -152,26 +221,53 @@ async def get_cookidoo_planned_recipes_for_day(
             logger.warning("Stored Cookidoo cookies expired, logging in again")
             await cookidoo.login()
             cookidoo.save_cookies(config.cookies_file)
-            return await get_cookidoo_calendar_recipes_for_day(cookidoo, planned_date)
+            return await get_cookidoo_calendar_recipes_for_range(
+                cookidoo,
+                session,
+                start_date,
+                end_date,
+            )
 
 
-async def get_cookidoo_calendar_recipes_for_day(
+async def get_cookidoo_calendar_recipes_for_range(
+    cookidoo: Cookidoo,
+    session: aiohttp.ClientSession,
+    start_date: date,
+    end_date: date,
+) -> dict[str, list[str]]:
+    planned_recipes_by_date: dict[str, list[str]] = {}
+    cached_calendar_weeks: dict[date, dict] = {}
+    current_date = start_date
+
+    while current_date <= end_date:
+        week_start = current_date - timedelta(days=current_date.weekday())
+        if week_start not in cached_calendar_weeks:
+            cached_calendar_weeks[week_start] = await get_raw_cookidoo_calendar_week(
+                cookidoo,
+                session,
+                current_date,
+            )
+
+        planned_recipes_by_date[current_date.isoformat()] = get_recipes_from_calendar_week(
+            cached_calendar_weeks[week_start],
+            cookidoo,
+            current_date,
+        )
+        current_date += timedelta(days=1)
+
+    return planned_recipes_by_date
+
+
+def get_recipes_from_calendar_week(
+    calendar_week: dict,
     cookidoo: Cookidoo,
     planned_date: date,
 ) -> list[str]:
-    url = cookidoo.api_endpoint / RECIPES_IN_CALENDAR_WEEK_PATH.format(
-        **cookidoo.localization.__dict__,
-        day=planned_date.isoformat(),
-    )
-    result = await cookidoo._request_json("get", url, "loading recipes in calendar week")
-    if not isinstance(result, Mapping):
-        raise ShoppingListMoverError("Unexpected Cookidoo calendar response")
-
     planned_day = next(
         (
             calendar_day
-            for calendar_day in result.get("myDays", [])
-            if isinstance(calendar_day, Mapping)
+            for calendar_day in calendar_week.get("myDays", [])
+            if isinstance(calendar_day, dict)
             and calendar_day.get("dayKey") == planned_date.isoformat()
         ),
         None,
@@ -186,8 +282,28 @@ async def get_cookidoo_calendar_recipes_for_day(
     return [
         format_cookidoo_calendar_recipe(recipe, cookidoo)
         for recipe in recipes
-        if isinstance(recipe, Mapping)
+        if recipe
     ]
+
+
+async def get_raw_cookidoo_calendar_week(
+    cookidoo: Cookidoo,
+    session: aiohttp.ClientSession,
+    planned_date: date,
+) -> dict:
+    url = cookidoo.api_endpoint / RECIPES_IN_CALENDAR_WEEK_PATH.format(
+        **cookidoo.localization.__dict__,
+        day=planned_date.isoformat(),
+    )
+    async with session.get(url, headers=DEFAULT_API_HEADERS) as response:
+        if response.status == 401:
+            raise CookidooAuthException("Cookidoo authorization failed")
+        if response.status >= 400:
+            raise CookidooException(
+                f"Cookidoo calendar request failed with status {response.status}"
+            )
+
+        return await response.json()
 
 
 async def get_cookidoo_localization(
@@ -215,6 +331,7 @@ async def login_to_cookidoo(cookidoo: Cookidoo, cookies_file: str) -> bool:
             logger.warning("Stored Cookidoo cookies are invalid, logging in again")
 
     await cookidoo.login()
+    cookies_path.parent.mkdir(parents=True, exist_ok=True)
     cookidoo.save_cookies(cookies_path)
     return False
 
@@ -234,17 +351,33 @@ def format_cookidoo_ingredient_item(item: CookidooIngredientItem) -> str:
     return item.name.strip()
 
 
-def format_cookidoo_calendar_recipe(recipe: Mapping[str, Any], cookidoo: Cookidoo) -> str:
-    title = str(recipe.get("title") or "").strip()
-    recipe_id = str(recipe.get("id") or "").strip()
-    if not title:
+def format_cookidoo_calendar_recipe(
+    recipe: dict | CookidooCalendarDayRecipe,
+    cookidoo: Cookidoo,
+) -> str:
+    if isinstance(recipe, CookidooCalendarDayRecipe):
+        name = recipe.name
+        url = recipe.url
+    else:
+        name = str(recipe.get("title") or "").strip()
+        recipe_id = str(recipe.get("id") or "").strip()
+        url = ""
+        if recipe_id:
+            url = str(
+                cookidoo.api_endpoint
+                / "recipes"
+                / "recipe"
+                / cookidoo.localization.language
+                / recipe_id
+            )
+
+    if not name:
         return ""
 
-    if not recipe_id:
-        return title
+    if not url:
+        return name.strip()
 
-    url = cookidoo.api_endpoint / "recipes" / "recipe" / cookidoo.localization.language / recipe_id
-    return f"{title} ({url})"
+    return f"{name.strip()} ({url})"
 
 
 def build_cookidoo_plan_note(planned_recipes: Sequence[str]) -> str:
